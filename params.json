@@ -1,0 +1,14 @@
+{
+    "order": {
+        "partner_name": "Cliente Prueba (TESTING)",
+        "partner_vat": "",
+        "date_order": "2026-04-20",
+        "order_line": [
+            {
+                "product_code": "PLASTO01",
+                "product_uom_qty": 1,
+                "price_unit": 100.0
+            }
+        ]
+    }
+}

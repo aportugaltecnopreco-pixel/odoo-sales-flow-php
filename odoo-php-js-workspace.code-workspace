@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "../odoo-sales-flow"
+		},
+		{
+			"path": "."
+		}
+	],
+	"settings": {}
+}
