@@ -39,8 +39,6 @@ class OdooHelper
         if ($code === '') {
             return null;
         }
-
-        // Buscar por default_code esto a traves del search_read
         $products = $this->callMethod($uid, 'product.product', 'search_read', [
             [['default_code', '=', $code]],
         ], [
@@ -51,8 +49,6 @@ class OdooHelper
         if (!empty($products) && isset($products[0])) {
             return $products[0];
         }
-
-        // Buscar por barcode si default_code no encontró
         $products = $this->callMethod($uid, 'product.product', 'search_read', [
             [['barcode', '=', $code]],
         ], [
@@ -106,6 +102,126 @@ class OdooHelper
 
         $partnerId = $this->callMethod($uid, 'res.partner', 'create', [[$partnerValues]]);
         return (int)(is_array($partnerId) ? $partnerId[0] : $partnerId);
+    }
+
+    public function getSaleAvailabilityBySaleId(int $uid, int $saleId): array
+    {
+        $pickings = $this->callMethod($uid, 'stock.picking', 'search_read', [
+            [['sale_id', '=', $saleId], ['state', 'not in', ['cancel']]],
+        ], [
+            'fields' => ['id', 'name', 'state', 'origin'],
+            'order' => 'id asc',
+        ]);
+
+        if (empty($pickings)) {
+            throw new Exception("No se encontraron pickings para la venta {$saleId}");
+        }
+
+        $moveFieldsMap = $this->callMethod($uid, 'stock.move', 'fields_get', [], []);
+        $demandField = $this->resolveFieldName($moveFieldsMap, ['product_uom_qty', 'quantity']);
+        $reservedField = $this->resolveFieldName($moveFieldsMap, ['reserved_availability', 'availability', 'quantity']);
+        $doneField = $this->resolveFieldName($moveFieldsMap, ['quantity_done', 'picked', 'quantity']);
+
+        $fields = ['id', 'product_id', 'state'];
+        if ($demandField !== null) {
+            $fields[] = $demandField;
+        }
+        if ($reservedField !== null) {
+            $fields[] = $reservedField;
+        }
+        if ($doneField !== null) {
+            $fields[] = $doneField;
+        }
+        $fields = array_values(array_unique($fields));
+
+        $result = [
+            'sale_id' => $saleId,
+            'pickings' => [],
+        ];
+
+        foreach ($pickings as $picking) {
+            $pickingId = (int)($picking['id'] ?? 0);
+            if ($pickingId <= 0) {
+                continue;
+            }
+
+            try {
+                $this->callMethod($uid, 'stock.picking', 'action_assign', [[$pickingId]]);
+            } catch (Exception $e) {
+            }
+
+            $moves = $this->callMethod($uid, 'stock.move', 'search_read', [
+                [['picking_id', '=', $pickingId], ['state', 'not in', ['cancel']]],
+            ], [
+                'fields' => $fields,
+                'order' => 'id asc',
+            ]);
+
+            $lines = [];
+            $totalDemand = 0.0;
+            $totalReserved = 0.0;
+            $totalDone = 0.0;
+            $allAvailable = true;
+
+            foreach ($moves as $move) {
+                $productId = 0;
+                $productName = 'N/A';
+                if (isset($move['product_id']) && is_array($move['product_id'])) {
+                    $productId = (int)($move['product_id'][0] ?? 0);
+                    $productName = (string)($move['product_id'][1] ?? 'N/A');
+                }
+
+                $demandQty = $demandField !== null ? (float)($move[$demandField] ?? 0) : 0.0;
+                $reservedQty = $reservedField !== null ? (float)($move[$reservedField] ?? 0) : 0.0;
+                $doneQty = $doneField !== null ? (float)($move[$doneField] ?? 0) : 0.0;
+                $available = $demandQty <= 0.0 || $reservedQty >= $demandQty;
+
+                if (!$available) {
+                    $allAvailable = false;
+                }
+
+                $totalDemand += $demandQty;
+                $totalReserved += $reservedQty;
+                $totalDone += $doneQty;
+
+                $lines[] = [
+                    'move_id' => (int)($move['id'] ?? 0),
+                    'product_id' => $productId,
+                    'product_name' => $productName,
+                    'state' => (string)($move['state'] ?? 'unknown'),
+                    'demand_qty' => $demandQty,
+                    'reserved_qty' => $reservedQty,
+                    'done_qty' => $doneQty,
+                    'available' => $available,
+                ];
+            }
+
+            $result['pickings'][] = [
+                'id' => $pickingId,
+                'name' => (string)($picking['name'] ?? ''),
+                'state' => (string)($picking['state'] ?? 'unknown'),
+                'origin' => (string)($picking['origin'] ?? ''),
+                'all_available' => $allAvailable,
+                'totals' => [
+                    'demand_qty' => $totalDemand,
+                    'reserved_qty' => $totalReserved,
+                    'done_qty' => $totalDone,
+                ],
+                'lines' => $lines,
+            ];
+        }
+
+        return $result;
+    }
+
+    private function resolveFieldName(array $fieldsMap, array $candidates): ?string
+    {
+        foreach ($candidates as $field) {
+            if (isset($fieldsMap[$field])) {
+                return $field;
+            }
+        }
+        return null;
     }
 
     private function makeRequest(string $endpoint, array $payload): array

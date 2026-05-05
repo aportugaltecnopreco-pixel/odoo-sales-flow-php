@@ -6,10 +6,7 @@ class Auth
     private string $db;
     private string $username;
     private string $password;
-
-    /**
-     * Constructor privado para forzar uso del método factory
-     */
+    
     private function __construct(string $odooUrl, string $db, string $username, string $password)
     {
         $this->odooUrl = $odooUrl;
@@ -18,10 +15,6 @@ class Auth
         $this->password = $password;
     }
 
-    /**
-     * Factory method para crear instancia desde variables de entorno
-     * SOLID: Separación de dependencias
-     */
     public static function fromEnvironment(): self
     {
         $odooUrl = getenv('ODOO_URL');
@@ -42,13 +35,6 @@ class Auth
         return new self($odooUrl, $db, $username, $password);
     }
 
-    /**
-     * Autentica contra Odoo y devuelve el UID
-     * Equivalente a auth.js/authenticate()
-     * 
-     * @return int El UID del usuario autenticado
-     * @throws Exception Si la autenticación falla
-     */
     public function authenticate(): int
     {
         $payload = [

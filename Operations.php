@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 class Operations
 {
@@ -34,7 +34,7 @@ class Operations
     {
         $uid = $this->auth->authenticate();
         $this->helper->callMethod($uid, 'sale.order', 'action_confirm', [[$orderId]]);
-        echo "✔ Sale Order {$orderId} confirmed successfully.\n";
+        echo "âœ” Sale Order {$orderId} confirmed successfully.\n";
     }
     public function getPickingIdForSale(int $saleId): int
     {
@@ -67,7 +67,7 @@ class Operations
             throw new Exception($this->buildPickingValidationErrorMessage($uid, $pickingId, $e->getMessage()));
         }
         if ($result === true) {
-            echo "✔ Stock Picking {$pickingId} validated successfully with no backorder.\n";
+            echo "âœ” Stock Picking {$pickingId} validated successfully with no backorder.\n";
             return;
         }
         if (is_array($result) && isset($result['res_model'])) {
@@ -75,7 +75,7 @@ class Operations
                 $this->helper->callMethod($uid, 'confirm.stock.sms', 'action_cancel', [
                     [$result['res_id']],
                 ]);
-                echo "✔ Stock Picking {$pickingId} validated successfully (SMS canceled).\n";
+                echo "âœ” Stock Picking {$pickingId} validated successfully (SMS canceled).\n";
             } elseif ($result['res_model'] === 'stock.backorder.confirmation') {
                 $backorder = $this->helper->callMethod($uid, 'stock.backorder.confirmation', 'create', [
                     [['pick_ids' => $result['context']['default_pick_ids'] ?? []]],
@@ -85,8 +85,8 @@ class Operations
                     $this->helper->callMethod($uid, 'stock.backorder.confirmation', 'process', [
                         [$backorder[0]],
                     ]);
-                    echo "✔ Stock Picking {$pickingId} validated successfully.\n";
-                    echo "✔ Backorder {$backorder[0]} confirmed successfully.\n";
+                    echo "âœ” Stock Picking {$pickingId} validated successfully.\n";
+                    echo "âœ” Backorder {$backorder[0]} confirmed successfully.\n";
                 }
             }
         }
@@ -236,42 +236,96 @@ class Operations
     public function createInvoiceFromSale(int $saleId): int
     {
         $uid = $this->auth->authenticate();
-        try {
-            $result = $this->helper->callMethod($uid, 'sale.order', '_create_invoices', [
-                [$saleId],
-            ]);
-            if (!empty($result)) {
-                if (is_array($result)) {
-                    return (int)$result[0];
-                }
-                return (int)$result;
-            }
-        } catch (Exception $e) {
-           throw $e;
-        }
+        $errors = [];
+
         try {
             $result = $this->helper->callMethod($uid, 'sale.order', 'action_create_invoice', [
                 [$saleId],
             ]);
-
-            if (!empty($result)) {
-                if (is_array($result)) {
-                    return (int)$result[0];
-                }
-                return (int)$result;
+            $invoiceId = $this->extractIdFromRpcResult($result);
+            if ($invoiceId > 0) {
+                return $invoiceId;
             }
         } catch (Exception $e) {
-            throw new Exception("No se pudo crear la factura. Métodos disponibles no encontrados: " . $e->getMessage());
+            $errors[] = 'action_create_invoice: ' . $e->getMessage();
         }
 
-        throw new Exception("Failed to create invoice from sale order {$saleId}");
+        try {
+            $context = [
+                'active_model' => 'sale.order',
+                'active_id' => $saleId,
+                'active_ids' => [$saleId],
+            ];
+
+            $wizard = $this->helper->callMethod($uid, 'sale.advance.payment.inv', 'create', [[
+                'sale_order_ids' => [[6, 0, [$saleId]]],
+                'advance_payment_method' => 'delivered',
+            ]], [
+                'context' => $context,
+            ]);
+
+            $wizardId = $this->extractIdFromRpcResult($wizard);
+            if ($wizardId <= 0) {
+                throw new Exception("No se pudo crear el wizard de facturacion para la venta {$saleId}");
+            }
+
+            $result = $this->helper->callMethod($uid, 'sale.advance.payment.inv', 'create_invoices', [
+                [$wizardId],
+            ], [
+                'context' => $context,
+            ]);
+
+            $invoiceId = $this->extractIdFromRpcResult($result);
+            if ($invoiceId > 0) {
+                return $invoiceId;
+            }
+
+            throw new Exception("El wizard no devolvio ID de factura para la venta {$saleId}");
+        } catch (Exception $e) {
+            $errors[] = 'sale.advance.payment.inv: ' . $e->getMessage();
+        }
+
+        throw new Exception("No se pudo crear la factura para la venta {$saleId}. " . implode(' | ', $errors));
     }
+
+    public function checkSaleAvailability(int $saleId): array
+    {
+        $uid = $this->auth->authenticate();
+        return $this->helper->getSaleAvailabilityBySaleId($uid, $saleId);
+    }
+
+    private function extractIdFromRpcResult(mixed $result): int
+    {
+        if (is_int($result)) {
+            return $result > 0 ? $result : 0;
+        }
+
+        if (is_string($result) && ctype_digit($result)) {
+            $id = (int)$result;
+            return $id > 0 ? $id : 0;
+        }
+
+        if (is_array($result)) {
+            if (isset($result['res_id']) && is_numeric($result['res_id'])) {
+                $id = (int)$result['res_id'];
+                return $id > 0 ? $id : 0;
+            }
+
+            if (isset($result[0]) && is_numeric($result[0])) {
+                $id = (int)$result[0];
+                return $id > 0 ? $id : 0;
+            }
+        }
+
+        return 0;
+    }
+
     public function confirmInvoice(int $invoiceId): void
     {
         $uid = $this->auth->authenticate();
 
         $this->helper->callMethod($uid, 'account.move', 'action_post', [[$invoiceId]]);
-        echo "✔ Invoice {$invoiceId} confirmed successfully.\n";
+        echo "âœ” Invoice {$invoiceId} confirmed successfully.\n";
     }
     private function prepareOrder(int $uid): array
     {
@@ -294,12 +348,12 @@ class Operations
         foreach ($orderParams as $param) {
             $productCode = trim((string)($param['product_code'] ?? ''));
             if ($productCode === '') {
-                throw new Exception('El parámetro product_code es obligatorio en cada línea');
+                throw new Exception('El parÃ¡metro product_code es obligatorio en cada lÃ­nea');
             }
 
             $product = $this->helper->searchProductByCode($uid, $productCode);
             if ($product === null) {
-                throw new Exception("No se encontró el producto con código: {$productCode}");
+                throw new Exception("No se encontrÃ³ el producto con cÃ³digo: {$productCode}");
             }
 
             $productId = (int)$product['id'];
@@ -327,3 +381,5 @@ class Operations
         return $orderLines;
     }
 }
+
+
